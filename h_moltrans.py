@@ -7,18 +7,18 @@ Original file is located at
     https://colab.research.google.com/drive/12WsUOZStIExf-l1dleAbNDzmmVd9aAc5
 """
 
-from google.colab import drive
-drive.mount('/content/drive')
+# from google.colab import drive
+# drive.mount('/content/drive')
 
-# Commented out IPython magic to ensure Python compatibility.
-# %cd /content/drive/MyDrive/DTI_prediction/MolTrans/
+# # Commented out IPython magic to ensure Python compatibility.
+# # %cd /content/drive/MyDrive/DTI_prediction/MolTrans/
 
-# Commented out IPython magic to ensure Python compatibility.
-# %cd MolTrans
+# # Commented out IPython magic to ensure Python compatibility.
+# # %cd MolTrans
 
-!pip install torch
+# !pip install torch
 
-!pip install pandas
+# !pip install pandas
 
 import os
 import torch
@@ -45,9 +45,9 @@ set_seed(42)
 
 """# **DAVIS data on GCVAE**"""
 
-!pip install torch_geometric
+# !pip install torch_geometric
 
-!pip install rdkit
+# !pip install rdkit
 
 import pandas as pd
 import numpy as np
@@ -64,16 +64,16 @@ from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 
 # Load and preprocess datasets
-file_path = '/mnt/data/MolTrans.csv'
+file_path = '/mnt/research/Datta_Aniruddha/Students/Mondal_Madhurima/MolTrans/dataset/DAVIS/train.csv'
 df = pd.read_csv(file_path)
 df = df.sample(n=1000, random_state=42).reset_index(drop=True)
 df = df[['SMILES', 'Target Sequence', 'Label']]
 
-df_val = pd.read_csv('/mnt/data/MolTrans_val.csv')
+df_val = pd.read_csv('/mnt/research/Datta_Aniruddha/Students/Mondal_Madhurima/MolTrans/dataset/DAVIS/val.csv')
 df_val = df_val.sample(n=10, random_state=42).reset_index(drop=True)
 df_val = df_val[['SMILES', 'Target Sequence', 'Label']]
 
-df_test = pd.read_csv('/mnt/data/MolTrans_test.csv')
+df_test = pd.read_csv('/mnt/research/Datta_Aniruddha/Students/Mondal_Madhurima/MolTrans/dataset/DAVIS/test.csv')
 df_test = df_test.sample(n=10, random_state=42).reset_index(drop=True)
 df_test = df_test[['SMILES', 'Target Sequence', 'Label']]
 
