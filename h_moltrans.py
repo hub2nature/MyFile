@@ -112,6 +112,9 @@ def protein_to_token(sequence, max_length=1000):
     tokenized_seq = tokenized_seq[:max_length] + [0] * (max_length - len(tokenized_seq))
     return torch.tensor(tokenized_seq, dtype=torch.long)
 
+
+
+
 # Convert datasets
 def create_smiles_graph_data(df):
     data_list = []
