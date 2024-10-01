@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 import torch
@@ -16,14 +17,11 @@ import os
 import random
 from subword_nmt.apply_bpe import BPE
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
 # Set up for reproducibility and output redirection
 seeds = [42, 123, 456, 782, 102]
-if os.path.exists("davis_no_resi_5runs.txt"):
-    os.remove("davis_no_resi_5runs.txt")
-sys.stdout = open('davis_no_resi_5runs.txt', 'w')
+if os.path.exists("their_code_curcumin_5seeds.txt"):
+    os.remove("their_code_curcumin_5seeds.txt")
+sys.stdout = open('their_code_curcumin_5seeds.txt', 'w')
 
 
 # Initialize BPE for drug and protein sequences
@@ -175,13 +173,13 @@ class ResidualBlock(nn.Module):
     def __init__(self, emb_size):
         super(ResidualBlock, self).__init__()
         self.multi_head_attention = MultiHeadSelfAttention(emb_size, num_heads=8)
-        self.layer_norm = nn.LayerNorm(emb_size).to(device)
+        self.layer_norm = nn.LayerNorm(emb_size)
         self.fc = nn.Sequential(
             nn.Linear(emb_size, emb_size * 4),
             nn.ReLU(),
             nn.Linear(emb_size * 4, emb_size)
         )
-        self.dropout = nn.Dropout(0.37)
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, x):
         # Apply multi-head self-attention and add the residual
@@ -243,40 +241,32 @@ class BIN_Interaction_With_SpatialAttention(nn.Module):
         self.residual_block_drug = ResidualBlock(self.emb_size)
         self.residual_block_protein = ResidualBlock(self.emb_size)
 
-        self.spatial_attention = SpatialAttention(in_channels=128, out_channels=128)
+        self.spatial_attention = SpatialAttention(in_channels=32, out_channels=32)
 
         self.decoder = nn.Sequential(
-            nn.Linear(128*50*100, 512),
+            nn.Linear(32*50*100, 512),
             nn.ReLU(True),
             nn.BatchNorm1d(512),
             nn.Dropout(self.dropout_rate),
             nn.Linear(512, 64),
             nn.ReLU(True),
             nn.BatchNorm1d(64),
-            nn.Linear(64, 1)
-            # nn.ReLU(True),
-            # nn.Linear(32, 1)
+            nn.Linear(64, 32),
+            nn.ReLU(True),
+            nn.Linear(32, 1)
         )
 
-        # # Linear decoder instead of MLP
-        # self.decoder = nn.Sequential(
-        #     nn.Linear(128 * 50 * 100, 1)
-        # )
-
-
     def forward(self, d, p, d_mask, p_mask):
-        d = d.to(device)
-        p = p.to(device)
-        d_mask = d_mask.to(device)
-        p_mask = p_mask.to(device)
+        # print('shape of d',d.shape)
         batch_size = d.size(0)
+        # print(f"batch_size: {batch_size}")
 
         d_emb = self.demb(d)
         p_emb = self.pemb(p)
 
-        # # Apply residual blocks
-        # d_emb = self.residual_block_drug(d_emb)
-        # p_emb = self.residual_block_protein(p_emb)
+        # Apply residual blocks
+        d_emb = self.residual_block_drug(d_emb)
+        p_emb = self.residual_block_protein(p_emb)
 
         d_emb = d_emb.transpose(0, 1)
         p_emb = p_emb.transpose(0, 1)
@@ -300,20 +290,56 @@ class BIN_Interaction_With_SpatialAttention(nn.Module):
 # Updated configuration function
 def BIN_config_DBPE():
     config = {}
-    config['batch_size'] = 64
+    config['batch_size'] = 8
     config['input_dim_drug'] = 23532
     config['input_dim_target'] = 16693
-    config['train_epoch'] = 100
+    config['train_epoch'] = 50
     config['max_drug_seq'] = 50
     config['max_protein_seq'] = 100
-    config['emb_size'] = 128
-    config['dropout_rate'] = 0.37
+    config['emb_size'] = 32
+    config['dropout_rate'] = 0.2
 
     config['num_attention_heads'] = 8
     config['gating'] = False
 
     config['flat_dim'] = 2500
     return config
+# Function to predict DTI probabilities for curcumin and return top 5 gene symbols (ID2)
+def predict_curcumin_dti_probabilities(curcumin_smiles, model, df_mine, max_d, max_p):
+    # Convert curcumin SMILES to embeddings
+    curcumin_emb, curcumin_mask = drug2emb_encoder(curcumin_smiles, max_d)
+    curcumin_emb_tensor = torch.tensor(curcumin_emb).unsqueeze(0).long().cuda()
+    curcumin_mask_tensor = torch.tensor(curcumin_mask).unsqueeze(0).float().cuda()
+
+    # Initialize list to store predictions
+    protein_preds = []
+
+    with torch.no_grad():
+        for idx, row in df_mine.iterrows():
+            protein = row['X2']  # Get the protein sequence (X2)
+            gene_symbol = row['ID2']  # Get the gene symbol (ID2)
+
+            # Convert each unique protein sequence to embeddings
+            protein_emb, protein_mask = protein2emb_encoder(protein, max_p)
+            protein_emb_tensor = torch.tensor(protein_emb).unsqueeze(0).long().cuda()
+            protein_mask_tensor = torch.tensor(protein_mask).unsqueeze(0).float().cuda()
+
+            # Predict DTI probability for curcumin against the current protein
+            score = model(curcumin_emb_tensor, protein_emb_tensor, curcumin_mask_tensor, protein_mask_tensor)
+            score = torch.sigmoid(score).item()  # Convert score to probability
+
+            # Store the gene symbol (ID2) and the predicted score
+            protein_preds.append((gene_symbol, score))
+
+    # Sort predictions by probability and get the top 5
+    top_5_preds = sorted(protein_preds, key=lambda x: x[1], reverse=True)[:5]
+
+    print("\nTop 5 predicted gene symbols for Curcumin:")
+    for gene_symbol, score in top_5_preds:
+        print(f"Gene Symbol: {gene_symbol}, Predicted DTI Probability: {score:.4f}")
+
+    return top_5_preds
+
 
 # Function for testing the model with optimal threshold using ROC curve
 def test_with_optimal_threshold(data_generator, model, pos_weight):
@@ -325,11 +351,9 @@ def test_with_optimal_threshold(data_generator, model, pos_weight):
 
     with torch.no_grad():
         for d, p, d_mask, p_mask, label in data_generator:
-            d = d.to(device)
-            p = p.to(device)
-            d_mask = d_mask.to(device)
-            p_mask = p_mask.to(device)
-            label = label.to(device)
+            # print(f"drug test embedding shape: {d.shape}")
+            # print(f"Protein test embedding shape: {p.shape}")
+
             score = model(d.long().cuda(), p.long().cuda(), d_mask.long().cuda(), p_mask.long().cuda())
             logits = torch.squeeze(score)
 
@@ -338,11 +362,8 @@ def test_with_optimal_threshold(data_generator, model, pos_weight):
             elif label.size(0) > logits.size(0):
                 label = label[:logits.size(0)]
 
-            loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device= device))
-            # label = Variable(torch.from_numpy(np.array(label)).float()).cuda()
-
-            label = label.cpu().numpy()
-            label = Variable(torch.from_numpy(label).float()).cuda()
+            loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).cuda())
+            label = Variable(torch.from_numpy(np.array(label)).float()).cuda()
 
             loss = loss_fct(logits, label)
 
@@ -360,7 +381,6 @@ def test_with_optimal_threshold(data_generator, model, pos_weight):
     fpr, tpr, thresholds_roc = roc_curve(y_label, y_pred)
     optimal_threshold_index = np.argmax(tpr - fpr)
     optimal_threshold = thresholds_roc[optimal_threshold_index]
-    optimal_threshold = min(0.6, optimal_threshold)
     print("Optimal threshold (ROC curve): " + str(optimal_threshold))
 
     y_pred_s = [1 if i >= optimal_threshold else 0 for i in y_pred]
@@ -419,12 +439,12 @@ def run_for_seeds(seeds, lr):
         fold_n = seed  # Using seed as fold identifier
         s = time.time()
 
-        model_max, test_metrics, loss_history = main(fold_n, lr)
+        model_max, loss_history, test_metrics = main(fold_n, lr)
         e = time.time()
 
         # Collect metrics for each seed
         test_roc_auc, test_auprc, test_f1, test_loss, precision, recall, sensitivity, specificity, accuracy, optimal_threshold = test_metrics
-        train_loss_history, val_loss_history = loss_history
+        # optimal_threshold = test_metrics[-1]  # Assuming the last return value is optimal threshold
 
         all_test_roc_auc.append(test_roc_auc)
         all_test_auprc.append(test_auprc)
@@ -441,16 +461,16 @@ def run_for_seeds(seeds, lr):
         print(f"Test ROC AUC: {test_roc_auc}, Test AUPRC: {test_auprc}, Test F1: {test_f1}, Test Loss: {test_loss}\n")
 
     # Print mean and standard deviation of test metrics
-    print(f"Mean Test ROC AUC: {np.mean(all_test_roc_auc):.3f}, Std: {np.std(all_test_roc_auc):.3f}")
-    print(f"Mean Test AUPRC: {np.mean(all_test_auprc):.3f}, Std: {np.std(all_test_auprc):.3f}")
-    print(f"Mean Test F1: {np.mean(all_test_f1):.3f}, Std: {np.std(all_test_f1):.3f}")
-    print(f"Mean Test Loss: {np.mean(all_test_loss):.3f}, Std: {np.std(all_test_loss):.3f}")
-    print(f"Mean Precision: {np.mean(all_test_precision):.3f}, Std: {np.std(all_test_precision):.3f}")
-    print(f"Mean Recall: {np.mean(all_test_recall):.3f}, Std: {np.std(all_test_recall):.3f}")
-    print(f"Mean Sensitivity: {np.mean(all_test_sensitivity):.3f}, Std: {np.std(all_test_sensitivity):.3f}")
-    print(f"Mean Specificity: {np.mean(all_test_specificity):.3f}, Std: {np.std(all_test_specificity):.3f}")
-    print(f"Mean Accuracy: {np.mean(all_test_accuracy):.3f}, Std: {np.std(all_test_accuracy):.3f}")
-    print(f"Mean Optimal Threshold: {np.mean(all_optimal_thresholds):.3f}, Std: {np.std(all_optimal_thresholds):.3f}")
+    print(f"Mean Test ROC AUC: {np.mean(all_test_roc_auc):.4f}, Std: {np.std(all_test_roc_auc):.4f}")
+    print(f"Mean Test AUPRC: {np.mean(all_test_auprc):.4f}, Std: {np.std(all_test_auprc):.4f}")
+    print(f"Mean Test F1: {np.mean(all_test_f1):.4f}, Std: {np.std(all_test_f1):.4f}")
+    print(f"Mean Test Loss: {np.mean(all_test_loss):.4f}, Std: {np.std(all_test_loss):.4f}")
+    print(f"Mean Precision: {np.mean(all_test_precision):.4f}, Std: {np.std(all_test_precision):.4f}")
+    print(f"Mean Recall: {np.mean(all_test_recall):.4f}, Std: {np.std(all_test_recall):.4f}")
+    print(f"Mean Sensitivity: {np.mean(all_test_sensitivity):.4f}, Std: {np.std(all_test_sensitivity):.4f}")
+    print(f"Mean Specificity: {np.mean(all_test_specificity):.4f}, Std: {np.std(all_test_specificity):.4f}")
+    print(f"Mean Accuracy: {np.mean(all_test_accuracy):.4f}, Std: {np.std(all_test_accuracy):.4f}")
+    print(f"Mean Optimal Threshold: {np.mean(all_optimal_thresholds):.4f}, Std: {np.std(all_optimal_thresholds):.4f}")
 
     return {
         'roc_auc_mean': np.mean(all_test_roc_auc),
@@ -475,11 +495,9 @@ def run_for_seeds(seeds, lr):
         'optimal_threshold_std': np.std(all_optimal_thresholds)
     }
 
-import matplotlib.pyplot as plt
 def main(fold_n, lr):
     config = BIN_config_DBPE()
-    train_loss_history = []
-    val_loss_history = []
+    loss_history = []
     val_auc_list = []
     patience = 10
 
@@ -500,74 +518,58 @@ def main(fold_n, lr):
     # Calculate weights for weighted loss
     dataFolder = './dataset/DAVIS'
     df_train_balanced = pd.read_csv(dataFolder + '/train.csv')
-    # pos_weight = df_train_balanced['Label'].value_counts()[0] / df_train_balanced['Label'].value_counts()[1]
+    pos_weight = df_train_balanced['Label'].value_counts()[0] / df_train_balanced['Label'].value_counts()[1]
 
-    # Calculate pos_weight for training set
-    pos_weight_train = df_train_balanced['Label'].value_counts()[0] / df_train_balanced['Label'].value_counts()[1]
-
-
-    opt = torch.optim.Adam(model.parameters(), lr=lr,weight_decay=0.0001116)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     df_val_balanced = pd.read_csv(dataFolder + '/val.csv')
-    # Calculate pos_weight for validation set
-    pos_weight_val = df_val_balanced['Label'].value_counts()[0] / df_val_balanced['Label'].value_counts()[1]
-
     df_test_balanced = pd.read_csv(dataFolder + '/test.csv')
-     # Calculate pos_weight for test set
-    pos_weight_test = df_test_balanced['Label'].value_counts()[0] / df_test_balanced['Label'].value_counts()[1]
+
+    # df_train_balanced=df_train_balanced.sample(frac=0.01,random_state=42)
+    # df_val_balanced=df_val_balanced.sample(frac=0.01,random_state=42)
+    # df_test_balanced=df_test_balanced.sample(frac=0.01,random_state=42)
 
     training_set = DTI_Dataset(df_train_balanced, df_train_balanced.Label.values, config['max_drug_seq'], config['max_protein_seq'])
-    training_generator = DataLoader(training_set, batch_size=config['batch_size'], shuffle=True, num_workers=2, drop_last=True)
+    training_generator = DataLoader(training_set, batch_size=config['batch_size'], shuffle=True, num_workers=4, drop_last=True)
 
     validation_set = DTI_Dataset(df_val_balanced, df_val_balanced.Label.values, config['max_drug_seq'], config['max_protein_seq'])
-    validation_generator = DataLoader(validation_set, batch_size=config['batch_size'], shuffle=False, num_workers=2, drop_last=True)
+    validation_generator = DataLoader(validation_set, batch_size=config['batch_size'], shuffle=False, num_workers=4, drop_last=True)
 
     testing_set = DTI_Dataset(df_test_balanced, df_test_balanced.Label.values, config['max_drug_seq'], config['max_protein_seq'])
-    testing_generator = DataLoader(testing_set, batch_size=config['batch_size'], shuffle=False, num_workers=2, drop_last=True)
+    testing_generator = DataLoader(testing_set, batch_size=config['batch_size'], shuffle=False, num_workers=4, drop_last=True)
 
     max_auc = 0
     model_max = copy.deepcopy(model)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5)
-    for epo in range(100):  # Epochs set to 100
+
+    for epo in range(150):  # Epochs set to 100
         model.train()
-        total_train_loss = 0
         for i, (d, p, d_mask, p_mask, label) in enumerate(training_generator):
-            d = d.to(device)
-            p = p.to(device)
-            d_mask = d_mask.to(device)
-            p_mask = p_mask.to(device)
-            label = label.to(device)
             score = model(d.long().cuda(), p.long().cuda(), d_mask.long().cuda(), p_mask.long().cuda())
             label = label.float().cuda()
             score = score[:label.shape[0]]
 
-            loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_train], device= device))
+            loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).cuda())
             n = torch.squeeze(score)
             loss = loss_fct(n, label)
-            total_train_loss += loss.item()
+            loss_history.append(loss.item())
 
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             opt.step()
 
-        avg_train_loss = total_train_loss / len(training_generator)
-        train_loss_history.append(avg_train_loss)
+        avg_train_loss = loss / len(training_generator)
 
         # Validation step
         with torch.set_grad_enabled(False):
-            roc_auc, auprc, f1, val_loss, precision, recall, sensitivity, specificity, accuracy, threshold = test_with_optimal_threshold(validation_generator, model, pos_weight_val)
+            roc_auc, auprc, f1, val_loss, precision, recall, sensitivity, specificity, accuracy, thresold = test_with_optimal_threshold(validation_generator, model, pos_weight)
 
-            val_loss_history.append(val_loss)
+
             val_auc_list.append(roc_auc)
             if roc_auc > max_auc:
                 model_max = copy.deepcopy(model)
                 max_auc = roc_auc
-        scheduler.step(val_loss)
 
-        # Print the current learning rate using get_last_lr()
-        current_lr = scheduler.optimizer.param_groups[0]['lr']
-        print(f'Epoch {epo + 1}, Current Learning Rate: {current_lr}')
         # Early stopping check
         if early_stopping(val_auc_list, patience):
             print(f"Early stopping at epoch {epo + 1}")
@@ -575,24 +577,33 @@ def main(fold_n, lr):
 
     # Testing with best model
     with torch.set_grad_enabled(False):
-        roc_auc, auprc, f1, test_loss, precision, recall, sensitivity, specificity, accuracy, optimal_threshold = test_with_optimal_threshold(testing_generator, model_max, pos_weight_test)
+        roc_auc, auprc, f1, test_loss, precision, recall, sensitivity, specificity, accuracy, optimal_threshold= test_with_optimal_threshold(testing_generator, model_max, pos_weight)
 
-    # Plotting training and validation losses
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_loss_history, label="Training Loss")
-    plt.plot(val_loss_history, label="Validation Loss")
-    plt.xlabel("Epochs")
-    plt.ylabel("Loss")
-    plt.title(f"Training vs Validation Loss for Seed {fold_n}")
-    plt.legend()
+    print('fine')
+    # Load the DAVIS data from the provided file path
+    file_path = '/mnt/research/Datta_Aniruddha/Students/Mondal_Madhurima/MolTrans/MY_DAVIS_DATA/davis.tab'
 
-    # Saving the plot as an image with the seed in the filename
-    plt.savefig(f"loss_plot_seed_{fold_n}.png")
-    plt.close()
+    # Read the data as a tab-separated file
+    df_davis = pd.read_csv(file_path, sep='\t')
 
-    return model_max, (roc_auc, auprc, f1, test_loss, precision, recall, sensitivity, specificity, accuracy, optimal_threshold), (train_loss_history, val_loss_history)
+    # Keep both 'Target ID' and 'Target Sequence' columns and drop duplicates to get unique targets
+    df_mine = df_davis[['ID2', 'X2']].drop_duplicates()
+
+    # Show the first few rows of the dataframe
+    print(df_mine.head())
+
+    # After testing, get unique protein sequences from the test dataset
+    unique_proteins = df_mine #['Target Sequence'].unique().tolist()
+    print(f"number of unique proteins: {len(unique_proteins)}")
+    # Curcumin SMILES string
+    curcumin_smiles = "COC1=C(C=CC(=C1)/C=C/C(=O)CC(=O)/C=C/C2=CC(=C(C=C2)O)OC)O"
+
+    # Predict DTIs for curcumin against unique proteins
+    predict_curcumin_dti_probabilities(curcumin_smiles, model_max, unique_proteins, config['max_drug_seq'], config['max_protein_seq'])
+
+    return model_max, loss_history, (roc_auc, auprc, f1, test_loss, precision, recall, sensitivity, specificity, accuracy, optimal_threshold)
 
 
 if __name__ == '__main__':
-    lr = 0.0005121
-    run_for_seeds(seeds, lr)
+    lr = 1.704e-5
+    run_for_seeds([42], lr)
